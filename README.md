@@ -8,6 +8,9 @@
 - 每日比對程式：`job/daily.py`（以 `job/baseline.json` 的各船歷史常態比對最新 AIS 事件）
 - 照片：`img/`，來自 Wikimedia Commons，作者與授權標示於各船頁面
 
+## 台灣漁船頁籤
+台灣周邊（北緯 20–28、東經 116–126）4,546 艘有 AIS 的台灣籍漁船，以 2025-10 至 2026-10 為常態基準，比對 2026-10-06 至 11-05：GFW 判定關閉 AIS、出港後失聯（與自身常態比較）、作業漁區改變、新作業海域、異常遠離母港、停靠中國港口、進入中國 12 浬、與中國船相遇；並提供每艘船的習慣漁區總結。告警為依公開 AIS 推估的線索，未經查證，不代表任何違法或不當行為。
+
 ## 資料來源
 - AIS 身分與事件：Global Fishing Watch API v3（港口停靠、海上滯留、AIS 中斷），約 72 小時延遲。GFW 資料僅限非商業用途，引用請註明：Global Fishing Watch, www.globalfishingwatch.org
 - 舷號、艦名、單位：維基百科「中國海警艦艇」、Wikipedia "List of ships of the China Coast Guard"
