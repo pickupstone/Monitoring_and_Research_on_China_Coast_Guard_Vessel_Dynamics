@@ -5,7 +5,7 @@ position, compares new activity with the ship's historical baseline and writes:
   OUTDIR/latest.json   -> db doc live/latest
   OUTDIR/alerts.json   -> db doc alerts/<date>
 """
-import json, sys, math, os, time, datetime as dt, collections, re
+import math, json, sys, math, os, time, datetime as dt, collections, re
 import requests
 from concurrent.futures import ThreadPoolExecutor
 
@@ -99,6 +99,49 @@ def events(vid, ds, start, end):
         off = j["nextOffset"]
     return out
 
+
+# ---------- destination prediction (tables built by ccg_predict_export.py, stored in baseline['pred']) ----------
+SEASON_OF = lambda mth: ['春', '夏', '秋', '冬'][((mth - 3) % 12) // 3]
+def _sm(cnt, prior, b):
+    n = sum(cnt.values()); keys = set(prior) | set(cnt)
+    return {z: (cnt.get(z, 0) + b * prior.get(z, 0)) / (n + b) for z in keys}
+def predict_block(P, h, port, season):
+    """Probability that the next/current voyage is a mission (has loitering at sea), and where it goes."""
+    hp = P['hp']; port = port or '?'
+    base = _sm(P['gp'].get(P['grp'].get(h, '?'), {}), P['prior'], hp['b0'])
+    p = _sm(P['fp'].get(port, {}), base, hp['b0']); p = _sm(P['fps'].get(port + '|' + season, {}), p, hp['b0'])
+    q = _sm(P['s'].get(h, {}), p, hp['b1']); q = _sm(P['sp'].get(h, {}).get(port, {}), q, hp['b2']); q = _sm(P['sps'].get(h, {}).get(port + '|' + season, {}), q, hp['b3'])
+    t = sum(q.values()); q = {z: v / t for z, v in q.items()}
+    m1 = P['m1']; g = m1['g'][0] / m1['g'][1]
+    a = m1['s'].get(h, [0, 0]); pm = (a[0] + 10 * g) / (a[1] + 10)
+    a = m1['sp'].get(h + '|' + port, [0, 0]); pm = (a[0] + 5 * pm) / (a[1] + 5)
+    a = m1['sps'].get(h + '|' + port + '|' + season, [0, 0]); pm = (a[0] + 3 * pm) / (a[1] + 3)
+    Z = P['Z']; top = sorted(q, key=lambda z: -q[z])[:5]
+    return dict(mission=round(pm, 3), top=[[Z[int(z)], round(q[z], 3)] for z in top], probs={Z[int(z)]: v for z, v in q.items()},
+                n_hist=round(sum(P['s'].get(h, {}).values()), 1))
+def zone_counts(pts):
+    c = collections.Counter(zone(la, lo) for la, lo, t in pts); return [[z, n] for z, n in c.most_common()]
+def point_check(P, h, r, pts, port, season):
+    """Point anomalies for loitering positions since departure. At most one alert per kind:
+    the zone with the lowest predicted probability (< p_low), and the position farthest from every 0.5-degree cell
+    this ship has loitered in (> cell_km)."""
+    out = []; tw = {P['Z'][i] for i in P['tw']}; cs = P['cells'].get(h, [])
+    ptxt = '、'.join(f"{z} {round(v*100)}%" for z, v in r['top'][:3])
+    worst = None; far = None
+    for la, lo, t in pts:
+        z = zone(la, lo); pz = r['probs'].get(z, 0)
+        if z != '其他' and pz < P['p_low'] and (worst is None or pz < worst[0]): worst = (pz, z, la, lo, t)
+        if cs:
+            d = min(km(la, lo, float(k.split(',')[0]) + .25, float(k.split(',')[1]) + .25) for k in cs)
+            if d > P['cell_km'] and (far is None or d > far[0]): far = (d, z, la, lo, t)
+    if worst:
+        pz, z, la, lo, t = worst
+        out.append([3 if z in tw else 2, '偏離預測區塊', f"{t} 在「{z}」滯留；依出港港口 {P.get('pz', {}).get(port, port) or '不明'}、{season}季、所屬分局與自身習慣，預測此區塊機率僅 {pz*100:.1f}%（預測：{ptxt}）", la, lo, t])
+    if far:
+        d, z, la, lo, t = far
+        out.append([2 if z in tw else 1, '偏離歷史點位', f"{t} 在 {la:.2f}N {lo:.2f}E（{z}）滯留，距這艘船 5 年來任何滯留位置都超過 {d:.0f} 公里", la, lo, t])
+    return out
+
 def main(bfile, outdir):
     os.makedirs(outdir, exist_ok=True)
     BL = json.load(open(bfile))
@@ -133,8 +176,18 @@ def main(bfile, outdir):
         latest[h] = dict(t=last[0].isoformat()[:16], kind=last[1], lat=round(last[2], 3), lon=round(last[3], 3), zone=zone(last[2], last[3]), areas=areas(last[2], last[3]),
                          state=state, port=ports[-1]["port_visit"].get("startAnchorage", {}).get("name") if ports else None,
                          dep=dep.isoformat()[:16] if dep else None, sea_days=round((data_end - dep).total_seconds() / 86400, 1) if dep else None)
+        PR = BL.get('pred')
+        if PR:
+            pport = (ports[-1]["port_visit"].get("startAnchorage") or {}).get("name") if ports else PR['last_port'].get(h)
+            pseason = SEASON_OF(((dep or data_end) + dt.timedelta(hours=8)).month)
+            rp = predict_block(PR, h, pport, pseason)
+            ppts = [(e["position"]["lat"], e["position"]["lon"], e["start"][:16]) for e in loi if (not dep) or T(e["start"]) >= dep] if state == "出航" else []
+            pa = point_check(PR, h, rp, ppts, pport, pseason) if ppts else []
+            latest[h]['pred'] = dict(port=pport, season=pseason, mission=rp['mission'], top=rp['top'][:3], act=zone_counts(ppts), pa=[[x[0], x[1]] for x in pa])
         def alert(level, kind, text, la=None, lo=None, t=None):
             alerts.append(dict(hull=h, name=b.get('name') or '', ju=b.get('ju') or '', level=level, kind=kind, text=text, lat=la, lon=lo, t=t))
+        if PR:
+            for lv, kd, tx, la_, lo_, t_ in pa: alert(lv, kd, tx, la_, lo_, t_)
         # new activity compared with the baseline
         for e in loi:
             la, lo = e["position"]["lat"], e["position"]["lon"]; z = zone(la, lo); share = b['zshare'].get(z, 0); ts = e["start"][:16]
