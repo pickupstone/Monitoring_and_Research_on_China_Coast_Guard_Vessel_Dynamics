@@ -757,12 +757,19 @@ function renderNews(){const sel=$('#nw-day'),q=$('#nw-q').value.trim().toLowerCa
     ${(n.hulls||[]).length?`<div class="src">提及船艦：${n.hulls.map(shipLink).join('、')}</div>`:''}</article>`).join('')}
 (async()=>{let db=null;try{db=window.claude&&await window.claude.use('db')}catch(e){}
   $('#al-sev-slot').append(sevBoxes('al-sev',renderAlerts));['al-kind','al-day'].forEach(id=>$('#'+id).addEventListener('input',renderAlerts));['nw-day','nw-q'].forEach(id=>$('#'+id).addEventListener('input',renderNews));
-  if(!db){$('#al-tbl tbody').innerHTML='<tr><td colspan="5" class="empty">每日比對告警只在 claude.ai 上的報告版本即時更新；這個版本只顯示報告內建的資料（各船「近期異常」欄）。</td></tr>';$('#nw-list').innerHTML='<p class="empty">每日新聞只在 claude.ai 上的報告版本自動更新。</p>';return}
+  function setAlerts(list){DBALERTS=list;const sel=$('#al-day'),cur=sel.value;sel.innerHTML=DBALERTS.map(d=>`<option>${esc(d.date)}</option>`).join('');if(cur)sel.value=cur;
+    const kinds=[...new Set(DBALERTS.flatMap(d=>(d.items||[]).map(a=>a.kind)))];const ks=$('#al-kind'),kc=ks.value;ks.innerHTML='<option value="">全部類型</option>'+kinds.map(k=>`<option>${esc(k)}</option>`).join('');ks.value=kc;renderAlerts();window.__predRender&&window.__predRender()}
+  if(!db){$('#nw-list').innerHTML='<p class="empty">每日新聞只在 claude.ai 上的報告版本自動更新。</p>';
+    /* public copy: the 6-hourly job also publishes its results as live/latest.json and live/alerts.json next to this page */
+    const get=f=>fetch(f,{cache:'no-store'}).then(r=>r.ok?r.json():null).catch(()=>null);
+    const [l,a]=await Promise.all([get('live/latest.json'),get('live/alerts.json')]);
+    if(l&&l.positions){DBLIVE=l;window.__applyLive&&window.__applyLive(DBLIVE);window.__predRender&&window.__predRender()}
+    if(Array.isArray(a)&&a.length)setAlerts(a);
+    else $('#al-tbl tbody').innerHTML='<tr><td colspan="5" class="empty">尚未取得每 6 小時比對的告警；目前只顯示報告內建的資料（各船「近期異常」欄）。</td></tr>';
+    return}
   const to=setTimeout(()=>{if(!DBALERTS.length)renderAlerts();if(!DBNEWS.length)renderNews()},10000);
   db.doc('live/latest').onSnapshot(s=>{DBLIVE=s.data()||null;window.__applyLive&&window.__applyLive(DBLIVE);window.__predRender&&window.__predRender()},()=>{});
-  db.collection('alerts').orderBy('date','desc').limit(30).onSnapshot(q=>{clearTimeout(to);DBALERTS=q.docs.map(d=>d.data());
-    const sel=$('#al-day'),cur=sel.value;sel.innerHTML=DBALERTS.map(d=>`<option>${esc(d.date)}</option>`).join('');if(cur)sel.value=cur;
-    const kinds=[...new Set(DBALERTS.flatMap(d=>(d.items||[]).map(a=>a.kind)))];const ks=$('#al-kind'),kc=ks.value;ks.innerHTML='<option value="">全部類型</option>'+kinds.map(k=>`<option>${esc(k)}</option>`).join('');ks.value=kc;renderAlerts()},()=>renderAlerts());
+  db.collection('alerts').orderBy('date','desc').limit(30).onSnapshot(q=>{clearTimeout(to);setAlerts(q.docs.map(d=>d.data()))},()=>renderAlerts());
   db.collection('news').orderBy('date','desc').limit(60).onSnapshot(q=>{DBNEWS=q.docs.map(d=>d.data());const sel=$('#nw-day'),cur=sel.value;sel.innerHTML=DBNEWS.map(d=>`<option>${esc(d.date)}</option>`).join('');if(cur)sel.value=cur;renderNews()},()=>renderNews())})();
 /* ---------- AREAS ---------- */
 (function(){const AR=DATA.areas,box=$('#area-btns');let cur=0,map=null;
