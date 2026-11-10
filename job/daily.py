@@ -184,6 +184,9 @@ def main(bfile, outdir):
             ppts = [(e["position"]["lat"], e["position"]["lon"], e["start"][:16]) for e in loi if (not dep) or T(e["start"]) >= dep] if state == "出航" else []
             pa = point_check(PR, h, rp, ppts, pport, pseason) if ppts else []
             latest[h]['pred'] = dict(port=pport, season=pseason, mission=rp['mission'], top=rp['top'][:3], act=zone_counts(ppts), pa=[[x[0], x[1]] for x in pa])
+        if state == "出航":   # loitering since departure (within the fetch window), for the map's current-voyage track
+            latest[h]['trk'] = [[e["start"][:16], round(e["position"]["lat"], 3), round(e["position"]["lon"], 3), round((T(e["end"]) - T(e["start"])).total_seconds() / 3600, 1)]
+                                for e in loi if (not dep) or T(e["start"]) >= dep][-60:]
         def alert(level, kind, text, la=None, lo=None, t=None):
             alerts.append(dict(hull=h, name=b.get('name') or '', ju=b.get('ju') or '', level=level, kind=kind, text=text, lat=la, lon=lo, t=t))
         if PR:
